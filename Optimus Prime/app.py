@@ -1,3 +1,4 @@
+import functools
 import importlib.util
 import os
 import tempfile
@@ -16,6 +17,9 @@ st.set_page_config(page_title="Optimus Prime", layout="wide")
 
 APP_DIR = Path(__file__).parent
 DB_DIR  = APP_DIR.parent / "Database"
+
+def _negate_metric(stats, key):
+    return -stats[key]
 
 OPTIMIZE_METRICS = {
     "Sharpe Ratio":       ("Sharpe Ratio",        False),
@@ -214,7 +218,7 @@ with tab2:
 
         if run_opt:
             metric_key, minimize = OPTIMIZE_METRICS[metric_label]
-            maximize_fn = (lambda s: -s[metric_key]) if minimize else metric_key
+            maximize_fn = functools.partial(_negate_metric, key=metric_key) if minimize else metric_key
 
             df_opt = df_full.loc[str(opt_dates[0]):str(opt_dates[1])]  # opt_dates comes from slider synced to calendars
             st.caption(f"{commodity}  |  {opt_dates[0]} to {opt_dates[1]}  |  {len(df_opt):,} trading days")
