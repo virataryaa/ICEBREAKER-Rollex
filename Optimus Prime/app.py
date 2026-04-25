@@ -206,6 +206,8 @@ with tab2:
             )
             st.subheader("Maximize")
             metric_label = st.selectbox("Metric", list(OPTIMIZE_METRICS.keys()))
+            st.subheader("Max Tries")
+            max_tries = st.slider("Combinations to sample", min_value=50, max_value=2000, value=300, step=50)
 
         st.divider()
         run_opt = st.button("Run Optimizer", type="primary", key="run_opt")
@@ -224,9 +226,17 @@ with tab2:
             )
             bt_opt = Backtest(df_opt, StrategyClass, cash=cash, commission=commission, exclusive_orders=True)
 
-            with st.spinner("Optimizing — this may take a moment..."):
+            total_combos = 1
+            for v in opt_cfg["ranges"].values():
+                total_combos *= len(list(v)) if hasattr(v, '__iter__') and not isinstance(v, str) else 1
+            sampling = int(max_tries) < total_combos
+            label = f"Sampling {int(max_tries):,} of {total_combos:,} combinations..." if sampling else f"Running all {total_combos:,} combinations..."
+
+            with st.spinner(label):
                 constraint = opt_cfg.get("constraint")
-                kwargs = dict(maximize=maximize_fn, return_heatmap=True, **opt_cfg["ranges"])
+                kwargs = dict(maximize=maximize_fn, return_heatmap=True,
+                              max_tries=int(max_tries), random_state=42,
+                              **opt_cfg["ranges"])
                 if constraint:
                     kwargs["constraint"] = constraint
                 best_stats, heatmap = bt_opt.optimize(**kwargs)
