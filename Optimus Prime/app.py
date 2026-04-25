@@ -1,21 +1,33 @@
 import importlib.util
+import os
+import tempfile
 import warnings
 warnings.filterwarnings("ignore")
 
 import pandas as pd
-import plotly.graph_objects as go
+import plotly.express as px
 import pyarrow.parquet as pq
 import streamlit as st
+import streamlit.components.v1 as components
 from backtesting import Backtest
 from pathlib import Path
 
-st.set_page_config(page_title="Optimus Prime", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="Optimus Prime", layout="wide")
 
 APP_DIR = Path(__file__).parent
 DB_DIR  = APP_DIR.parent / "Database"
 
+OPTIMIZE_METRICS = {
+    "Sharpe Ratio":       ("Sharpe Ratio",        False),
+    "Return [%]":         ("Return [%]",           False),
+    "Return (Ann.) [%]":  ("Return (Ann.) [%]",    False),
+    "Calmar Ratio":       ("Calmar Ratio",          False),
+    "Win Rate [%]":       ("Win Rate [%]",          False),
+    "Profit Factor":      ("Profit Factor",         False),
+    "Max Drawdown (min)": ("Max. Drawdown [%]",     True),
+}
+
 # ── STRATEGY DISCOVERY ────────────────────────────────────────────────────────
-@st.cache_resource
 def load_strategies():
     strats = {}
     for f in sorted((APP_DIR / "strategies").glob("*.py")):
@@ -56,146 +68,218 @@ def load_data(commodity):
     })
     return df[["Open", "High", "Low", "Close"]].dropna()
 
+# ── HELPERS ───────────────────────────────────────────────────────────────────
+def stats_tables(stats):
+    drop = {"_equity_curve", "_trades", "_strategy", "_broker"}
+    rows = []
+    for k, v in stats.items():
+        if k in drop:
+            continue
+        rows.append({"Metric": k, "Value": f"{v:.4f}" if isinstance(v, float) else str(v)})
+    half = len(rows) // 2
+    l, r = st.columns(2)
+    with l:
+        st.dataframe(pd.DataFrame(rows[:half]),  hide_index=True, use_container_width=True)
+    with r:
+        st.dataframe(pd.DataFrame(rows[half:]), hide_index=True, use_container_width=True)
+
+
+def bt_plot(bt):
+    fd, tmp = tempfile.mkstemp(suffix=".html")
+    os.close(fd)
+    try:
+        bt.plot(filename=tmp, open_browser=False)
+        with open(tmp, "r", encoding="utf-8") as f:
+            html = f.read()
+        components.html(html, height=750, scrolling=True)
+    finally:
+        os.unlink(tmp)
+
+
 # ── HEADER ────────────────────────────────────────────────────────────────────
-st.markdown("## ⚡ Optimus Prime")
-st.caption("Roll-adjusted continuous futures backtester  |  Source: ICE Connect via ICEBREAKER-Rollex")
+st.title("Optimus Prime")
+st.caption("Roll-adjusted continuous futures backtester")
 
 if not COMMODITIES:
-    st.error("No commodities with OHLC data found. Run `rollex_builder --full` first.")
+    st.error("No commodities with OHLC data found. Run rollex_builder --full first.")
     st.stop()
 
 # ── SIDEBAR ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.header("⚙️ Configuration")
+    st.header("Configuration")
 
     commodity     = st.selectbox("Commodity", COMMODITIES)
     strategy_name = st.selectbox("Strategy",  list(STRATEGIES.keys()))
-
-    st.divider()
-
-    mod = STRATEGIES[strategy_name]
-    st.subheader(f"Strategy Parameters")
-    params = mod.params_ui(st)
+    mod           = STRATEGIES[strategy_name]
 
     st.divider()
     st.subheader("Engine")
     cash       = st.number_input("Starting Cash ($)", value=10_000, step=1_000, min_value=1_000)
     commission = st.number_input("Commission", value=0.002, step=0.001, format="%.3f", min_value=0.0)
-    size       = st.slider("Trade Size (fraction of equity)", 0.1, 1.0, 0.95, step=0.05)
+    size       = st.number_input("Trade Size (fraction of equity)", min_value=0.01, max_value=1.0, value=0.95, step=0.05, format="%.2f")
+
+# ── LOAD DATA ─────────────────────────────────────────────────────────────────
+df_full = load_data(commodity)
+min_date = df_full.index.min().date()
+max_date = df_full.index.max().date()
+
+# ── TABS ──────────────────────────────────────────────────────────────────────
+tab1, tab2 = st.tabs(["Backtest", "Optimize"])
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 1 — BACKTEST
+# ══════════════════════════════════════════════════════════════════════════════
+with tab1:
+    c_params, c_engine = st.columns([2, 1])
+
+    with c_params:
+        st.subheader("Strategy Parameters")
+        params = mod.params_ui(st)
+
+    with c_engine:
+        st.subheader("Date Range")
+        dc1, dc2 = st.columns(2)
+        bt_from = dc1.date_input("From", value=min_date, min_value=min_date, max_value=max_date, key="bt_from")
+        bt_to   = dc2.date_input("To",   value=max_date, min_value=min_date, max_value=max_date, key="bt_to")
+        date_range = st.slider(
+            "Drag to adjust",
+            min_value=min_date, max_value=max_date,
+            value=(bt_from, bt_to),
+            key="bt_slider",
+        )
 
     st.divider()
-    run = st.button("▶  Run Backtest", type="primary", use_container_width=True)
+    run = st.button("Run Backtest", type="primary", key="run_bt")
 
-# ── LOAD + PRICE CHART ────────────────────────────────────────────────────────
-df = load_data(commodity)
+    if run:
+        df = df_full.loc[str(date_range[0]):str(date_range[1])]
+        st.caption(f"{commodity}  |  {date_range[0]} to {date_range[1]}  |  {len(df):,} trading days")
 
-fig_price = go.Figure()
-fig_price.add_trace(go.Scatter(
-    x=df.index, y=df["Close"],
-    line=dict(color="#4A90D9", width=1.5),
-    name="Close (Rollex adjusted)",
-    hovertemplate="%{x|%d %b %Y}<br>%{y:.2f}<extra></extra>",
-))
-fig_price.update_layout(
-    title=dict(text=f"{commodity} — Continuous Roll-Adjusted Close", font=dict(size=14)),
-    height=280,
-    margin=dict(l=0, r=0, t=40, b=0),
-    plot_bgcolor="#0e1117",
-    paper_bgcolor="#0e1117",
-    font=dict(color="white"),
-    xaxis=dict(showgrid=False, rangeslider=dict(visible=False)),
-    yaxis=dict(showgrid=True, gridcolor="#1e2130"),
-    hovermode="x unified",
-)
-st.plotly_chart(fig_price, use_container_width=True)
+        with st.spinner("Running..."):
+            StrategyClass = mod.build(params, size=size)
+            bt    = Backtest(df, StrategyClass, cash=cash, commission=commission, exclusive_orders=True)
+            stats = bt.run()
 
-st.caption(f"Data: {df.index.min().date()} → {df.index.max().date()}  |  {len(df):,} trading days")
+        trades = stats["_trades"]
 
-# ── RUN BACKTEST ──────────────────────────────────────────────────────────────
-if run:
-    with st.spinner("Running backtest..."):
-        StrategyClass = mod.build(params, size=size)
-        bt    = Backtest(df, StrategyClass, cash=cash, commission=commission, exclusive_orders=True)
-        stats = bt.run()
+        st.subheader("Performance Summary")
+        stats_tables(stats)
+        st.divider()
 
-    trades = stats["_trades"]
-    eq     = stats["_equity_curve"]["Equity"]
+        st.subheader("Strategy Chart")
+        bt_plot(bt)
 
-    st.divider()
+        if not trades.empty:
+            with st.expander(f"Trade Log  ({len(trades)} trades)"):
+                display = trades[["EntryTime","ExitTime","Size","EntryPrice","ExitPrice","ReturnPct","PnL","Duration"]].copy()
+                display["ReturnPct"] = (display["ReturnPct"] * 100).round(2)
+                display["PnL"]       = display["PnL"].round(2)
+                display = display.rename(columns={"ReturnPct": "Return %"})
+                st.dataframe(display, use_container_width=True, hide_index=True)
+    else:
+        st.caption(f"{commodity}  |  {min_date} to {max_date}  |  {len(df_full):,} trading days")
+        st.info("Configure parameters above and click Run Backtest.")
 
-    # ── KEY METRICS ───────────────────────────────────────────────────────────
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
-    ret    = stats["Return [%]"]
-    bh_ret = stats["Buy & Hold Return [%]"]
-    c1.metric("Total Return",   f"{ret:.1f}%",
-              delta=f"B&H {bh_ret:.1f}%",
-              delta_color="normal")
-    c2.metric("Ann. Return",    f"{stats['Return (Ann.) [%]']:.1f}%")
-    c3.metric("Max Drawdown",   f"{stats['Max. Drawdown [%]']:.1f}%")
-    c4.metric("Sharpe Ratio",   f"{stats['Sharpe Ratio']:.2f}")
-    c5.metric("Win Rate",       f"{stats['Win Rate [%]']:.1f}%")
-    c6.metric("# Trades",       int(stats["# Trades"]))
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 2 — OPTIMIZE
+# ══════════════════════════════════════════════════════════════════════════════
+with tab2:
+    if not hasattr(mod, "optimize_params_ui"):
+        st.warning("This strategy does not support optimization yet.")
+    else:
+        c_opt, c_cfg = st.columns([2, 1])
 
-    # ── SECONDARY METRICS ─────────────────────────────────────────────────────
-    s1, s2, s3, s4 = st.columns(4)
-    s1.metric("Profit Factor",  f"{stats['Profit Factor']:.2f}")
-    s2.metric("Expectancy",     f"{stats['Expectancy [%]']:.2f}%")
-    s3.metric("Best Trade",     f"{stats['Best Trade [%]']:.1f}%")
-    s4.metric("Worst Trade",    f"{stats['Worst Trade [%]']:.1f}%")
+        with c_opt:
+            st.subheader("Parameter Ranges")
+            opt_cfg = mod.optimize_params_ui(st)
 
-    st.divider()
+        with c_cfg:
+            st.subheader("Date Range")
+            oc1, oc2 = st.columns(2)
+            opt_from = oc1.date_input("From", value=min_date, min_value=min_date, max_value=max_date, key="opt_from")
+            opt_to   = oc2.date_input("To",   value=max_date, min_value=min_date, max_value=max_date, key="opt_to")
+            opt_dates = st.slider(
+                "Drag to adjust",
+                min_value=min_date, max_value=max_date,
+                value=(opt_from, opt_to),
+                key="opt_slider",
+            )
+            st.subheader("Maximize")
+            metric_label = st.selectbox("Metric", list(OPTIMIZE_METRICS.keys()))
 
-    # ── EQUITY CURVE ──────────────────────────────────────────────────────────
-    bh = df["Close"].reindex(eq.index) / df["Close"].iloc[0] * cash
+        st.divider()
+        run_opt = st.button("Run Optimizer", type="primary", key="run_opt")
 
-    fig_eq = go.Figure()
-    fig_eq.add_trace(go.Scatter(
-        x=eq.index, y=eq.values,
-        name="Strategy",
-        line=dict(color="#00d4aa", width=2),
-        fill="tozeroy", fillcolor="rgba(0,212,170,0.05)",
-        hovertemplate="%{x|%d %b %Y}<br>$%{y:,.0f}<extra>Strategy</extra>",
-    ))
-    fig_eq.add_trace(go.Scatter(
-        x=bh.index, y=bh.values,
-        name="Buy & Hold",
-        line=dict(color="#888", width=1.5, dash="dot"),
-        hovertemplate="%{x|%d %b %Y}<br>$%{y:,.0f}<extra>Buy & Hold</extra>",
-    ))
-    fig_eq.update_layout(
-        title="Equity Curve",
-        height=380,
-        margin=dict(l=0, r=0, t=40, b=0),
-        plot_bgcolor="#0e1117",
-        paper_bgcolor="#0e1117",
-        font=dict(color="white"),
-        xaxis=dict(showgrid=False),
-        yaxis=dict(showgrid=True, gridcolor="#1e2130", tickprefix="$"),
-        legend=dict(orientation="h", y=1.08),
-        hovermode="x unified",
-    )
-    st.plotly_chart(fig_eq, use_container_width=True)
+        if run_opt:
+            metric_key, minimize = OPTIMIZE_METRICS[metric_label]
+            maximize_fn = (lambda s: -s[metric_key]) if minimize else metric_key
 
-    # ── TRADE LOG ─────────────────────────────────────────────────────────────
-    if not trades.empty:
-        st.subheader("Trade Log")
-        display = trades[[
-            "EntryTime", "ExitTime", "Size",
-            "EntryPrice", "ExitPrice",
-            "ReturnPct", "PnL", "Duration"
-        ]].copy()
-        display["ReturnPct"] = (display["ReturnPct"] * 100).round(2)
-        display["PnL"]       = display["PnL"].round(2)
-        display = display.rename(columns={"ReturnPct": "Return %"})
-        st.dataframe(display, use_container_width=True, hide_index=True)
+            df_opt = df_full.loc[str(opt_dates[0]):str(opt_dates[1])]  # opt_dates comes from slider synced to calendars
+            st.caption(f"{commodity}  |  {opt_dates[0]} to {opt_dates[1]}  |  {len(df_opt):,} trading days")
 
-    # ── FULL STATS ────────────────────────────────────────────────────────────
-    with st.expander("Full Stats"):
-        drop_cols = ["_equity_curve", "_trades", "_strategy", "_broker"]
-        stat_df   = pd.Series({
-            k: v for k, v in stats.items() if k not in drop_cols
-        }).to_frame("Value")
-        st.dataframe(stat_df, use_container_width=True)
+            StrategyClass = mod.build(
+                {k: list(v)[0] if hasattr(v, '__iter__') and not isinstance(v, str) else v
+                 for k, v in opt_cfg["ranges"].items()},
+                size=size
+            )
+            bt_opt = Backtest(df_opt, StrategyClass, cash=cash, commission=commission, exclusive_orders=True)
 
-else:
-    st.info("Configure your strategy in the sidebar and click **▶ Run Backtest**.")
+            with st.spinner("Optimizing — this may take a moment..."):
+                constraint = opt_cfg.get("constraint")
+                kwargs = dict(maximize=maximize_fn, return_heatmap=True, **opt_cfg["ranges"])
+                if constraint:
+                    kwargs["constraint"] = constraint
+                best_stats, heatmap = bt_opt.optimize(**kwargs)
+
+            # ── BEST PARAMS ───────────────────────────────────────────────────
+            st.subheader("Best Result")
+            best_strategy = best_stats["_strategy"]
+            best_params   = {k: getattr(best_strategy, k) for k in opt_cfg["ranges"]}
+            bp_df = pd.DataFrame([{"Parameter": k, "Best Value": v} for k, v in best_params.items()])
+            st.dataframe(bp_df, hide_index=True, use_container_width=False)
+
+            st.divider()
+
+            # ── BEST STATS ────────────────────────────────────────────────────
+            st.subheader("Performance Summary — Best Config")
+            stats_tables(best_stats)
+            st.divider()
+
+            # ── HEATMAP ───────────────────────────────────────────────────────
+            hx = opt_cfg["heatmap_x"]
+            hy = opt_cfg["heatmap_y"]
+            st.subheader(f"Heatmap  —  {metric_label}  ({hx} vs {hy})")
+
+            if heatmap is not None and not heatmap.empty:
+                hm_df   = heatmap.reset_index()
+                val_col = hm_df.columns[-1]
+                hm_2d   = hm_df.groupby([hx, hy])[val_col].max().unstack(hy)
+                hm_2d.index   = hm_2d.index.astype(str)
+                hm_2d.columns = hm_2d.columns.astype(str)
+
+                fig = px.imshow(
+                    hm_2d,
+                    labels=dict(x=hy, y=hx, color=metric_label),
+                    color_continuous_scale="RdYlGn" if not minimize else "RdYlGn_r",
+                    aspect="auto",
+                    text_auto=".2f",
+                )
+                fig.update_layout(margin=dict(l=0, r=0, t=30, b=0), height=420)
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning("Heatmap data not available — try widening the parameter ranges.")
+
+            # ── BEST CONFIG CHART ─────────────────────────────────────────────
+            st.subheader("Strategy Chart — Best Config")
+            bt_plot(bt_opt)
+
+            with st.expander(f"Trade Log  ({len(best_stats['_trades'])} trades)"):
+                trades = best_stats["_trades"]
+                if not trades.empty:
+                    display = trades[["EntryTime","ExitTime","Size","EntryPrice","ExitPrice","ReturnPct","PnL","Duration"]].copy()
+                    display["ReturnPct"] = (display["ReturnPct"] * 100).round(2)
+                    display["PnL"]       = display["PnL"].round(2)
+                    display = display.rename(columns={"ReturnPct": "Return %"})
+                    st.dataframe(display, use_container_width=True, hide_index=True)
+        else:
+            st.info("Configure parameter ranges above and click Run Optimizer.")
