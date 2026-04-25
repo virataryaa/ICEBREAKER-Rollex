@@ -15,6 +15,40 @@ def _bb_lower(arr, period, n_std):
     return (s.rolling(period).mean() - n_std * s.rolling(period).std()).values
 
 
+class BollingerStrategy(Strategy):
+    period = 20
+    n_std  = 2.0
+    mode   = "Breakout"
+    sl_pct = 0.05
+    tp_pct = 0.05
+    _size  = 0.95
+
+    def init(self):
+        close      = self.data.Close
+        self.upper = self.I(_bb_upper, close, self.period, self.n_std)
+        self.lower = self.I(_bb_lower, close, self.period, self.n_std)
+
+    def next(self):
+        entry    = self.data.Close[-1]
+        price    = self.data.Close
+        breakout = self.mode == "Breakout"
+
+        if breakout:
+            if crossover(price, self.upper) and not self.position.is_long:
+                self.position.close()
+                self.buy(size=self._size, sl=entry * (1 - self.sl_pct), tp=entry * (1 + self.tp_pct))
+            elif crossover(self.lower, price) and not self.position.is_short:
+                self.position.close()
+                self.sell(size=self._size, sl=entry * (1 + self.sl_pct), tp=entry * (1 - self.tp_pct))
+        else:
+            if crossover(price, self.lower) and not self.position.is_long:
+                self.position.close()
+                self.buy(size=self._size, sl=entry * (1 - self.sl_pct), tp=entry * (1 + self.tp_pct))
+            elif crossover(self.upper, price) and not self.position.is_short:
+                self.position.close()
+                self.sell(size=self._size, sl=entry * (1 + self.sl_pct), tp=entry * (1 - self.tp_pct))
+
+
 def params_ui(st):
     c1, c2, c3, c4, c5 = st.columns(5)
     period = int(c1.number_input("Period",  min_value=5,   max_value=200, value=20,  step=1))
@@ -56,38 +90,10 @@ def optimize_params_ui(st):
 
 
 def build(params, size=0.95):
-    _size = size
-
-    class BollingerStrategy(Strategy):
-        period = params["period"]
-        n_std  = params["n_std"]
-        mode   = params["mode"]
-        sl_pct = params["sl_pct"]
-        tp_pct = params["tp_pct"]
-
-        def init(self):
-            close      = self.data.Close
-            self.upper = self.I(_bb_upper, close, self.period, self.n_std)
-            self.lower = self.I(_bb_lower, close, self.period, self.n_std)
-
-        def next(self):
-            entry    = self.data.Close[-1]
-            price    = self.data.Close
-            breakout = self.mode == "Breakout"
-
-            if breakout:
-                if crossover(price, self.upper) and not self.position.is_long:
-                    self.position.close()
-                    self.buy(size=_size, sl=entry * (1 - self.sl_pct), tp=entry * (1 + self.tp_pct))
-                elif crossover(self.lower, price) and not self.position.is_short:
-                    self.position.close()
-                    self.sell(size=_size, sl=entry * (1 + self.sl_pct), tp=entry * (1 - self.tp_pct))
-            else:
-                if crossover(price, self.lower) and not self.position.is_long:
-                    self.position.close()
-                    self.buy(size=_size, sl=entry * (1 - self.sl_pct), tp=entry * (1 + self.tp_pct))
-                elif crossover(self.upper, price) and not self.position.is_short:
-                    self.position.close()
-                    self.sell(size=_size, sl=entry * (1 + self.sl_pct), tp=entry * (1 - self.tp_pct))
-
+    BollingerStrategy.period = params["period"]
+    BollingerStrategy.n_std  = params["n_std"]
+    BollingerStrategy.mode   = params["mode"]
+    BollingerStrategy.sl_pct = params["sl_pct"]
+    BollingerStrategy.tp_pct = params["tp_pct"]
+    BollingerStrategy._size  = size
     return BollingerStrategy

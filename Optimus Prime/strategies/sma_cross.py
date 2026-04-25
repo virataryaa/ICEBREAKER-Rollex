@@ -9,6 +9,27 @@ def _sma(arr, n):
     return pd.Series(arr).rolling(n).mean().values
 
 
+class SmaCross(Strategy):
+    n1     = 10
+    n2     = 20
+    sl_pct = 0.05
+    tp_pct = 0.05
+    _size  = 0.95
+
+    def init(self):
+        self.sma1 = self.I(_sma, self.data.Close, self.n1)
+        self.sma2 = self.I(_sma, self.data.Close, self.n2)
+
+    def next(self):
+        entry = self.data.Close[-1]
+        if crossover(self.sma1, self.sma2):
+            self.position.close()
+            self.buy(size=self._size, sl=entry * (1 - self.sl_pct), tp=entry * (1 + self.tp_pct))
+        elif crossover(self.sma2, self.sma1):
+            self.position.close()
+            self.sell(size=self._size, sl=entry * (1 + self.sl_pct), tp=entry * (1 - self.tp_pct))
+
+
 def params_ui(st):
     c1, c2, c3, c4 = st.columns(4)
     n1     = int(c1.number_input("Fast MA (days)", min_value=2,  max_value=500, value=10,  step=1))
@@ -48,25 +69,9 @@ def optimize_params_ui(st):
 
 
 def build(params, size=0.95):
-    _size = size
-
-    class SmaCross(Strategy):
-        n1     = params["n1"]
-        n2     = params["n2"]
-        sl_pct = params["sl_pct"]
-        tp_pct = params["tp_pct"]
-
-        def init(self):
-            self.sma1 = self.I(_sma, self.data.Close, self.n1)
-            self.sma2 = self.I(_sma, self.data.Close, self.n2)
-
-        def next(self):
-            entry = self.data.Close[-1]
-            if crossover(self.sma1, self.sma2):
-                self.position.close()
-                self.buy(size=_size, sl=entry * (1 - self.sl_pct), tp=entry * (1 + self.tp_pct))
-            elif crossover(self.sma2, self.sma1):
-                self.position.close()
-                self.sell(size=_size, sl=entry * (1 + self.sl_pct), tp=entry * (1 - self.tp_pct))
-
+    SmaCross.n1     = params["n1"]
+    SmaCross.n2     = params["n2"]
+    SmaCross.sl_pct = params["sl_pct"]
+    SmaCross.tp_pct = params["tp_pct"]
+    SmaCross._size  = size
     return SmaCross

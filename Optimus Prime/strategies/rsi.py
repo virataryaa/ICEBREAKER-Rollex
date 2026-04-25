@@ -14,11 +14,32 @@ def _rsi(arr, period):
     return (100 - 100 / (1 + rs)).values
 
 
+class RSIStrategy(Strategy):
+    period     = 14
+    oversold   = 30
+    overbought = 70
+    sl_pct     = 0.05
+    tp_pct     = 0.05
+    _size      = 0.95
+
+    def init(self):
+        self.rsi = self.I(_rsi, self.data.Close, self.period)
+
+    def next(self):
+        entry = self.data.Close[-1]
+        if self.rsi[-1] < self.oversold and not self.position.is_long:
+            self.position.close()
+            self.buy(size=self._size, sl=entry * (1 - self.sl_pct), tp=entry * (1 + self.tp_pct))
+        elif self.rsi[-1] > self.overbought and not self.position.is_short:
+            self.position.close()
+            self.sell(size=self._size, sl=entry * (1 + self.sl_pct), tp=entry * (1 - self.tp_pct))
+
+
 def params_ui(st):
     c1, c2, c3, c4, c5 = st.columns(5)
-    period     = int(c1.number_input("RSI Period",       min_value=2,  max_value=200, value=14, step=1))
-    oversold   = int(c2.number_input("Oversold",         min_value=5,  max_value=49,  value=30, step=1))
-    overbought = int(c3.number_input("Overbought",       min_value=51, max_value=95,  value=70, step=1))
+    period     = int(c1.number_input("RSI Period",   min_value=2,  max_value=200, value=14, step=1))
+    oversold   = int(c2.number_input("Oversold",     min_value=5,  max_value=49,  value=30, step=1))
+    overbought = int(c3.number_input("Overbought",   min_value=51, max_value=95,  value=70, step=1))
     sl_pct     = c4.number_input("Stop Loss %",  min_value=0.1, max_value=50.0, value=5.0, step=0.5) / 100
     tp_pct     = c5.number_input("Take Profit %", min_value=0.1, max_value=50.0, value=5.0, step=0.5) / 100
     return dict(period=period, oversold=oversold, overbought=overbought,
@@ -56,25 +77,10 @@ def optimize_params_ui(st):
 
 
 def build(params, size=0.95):
-    _size = size
-
-    class RSIStrategy(Strategy):
-        period     = params["period"]
-        oversold   = params["oversold"]
-        overbought = params["overbought"]
-        sl_pct     = params["sl_pct"]
-        tp_pct     = params["tp_pct"]
-
-        def init(self):
-            self.rsi = self.I(_rsi, self.data.Close, self.period)
-
-        def next(self):
-            entry = self.data.Close[-1]
-            if self.rsi[-1] < self.oversold and not self.position.is_long:
-                self.position.close()
-                self.buy(size=_size, sl=entry * (1 - self.sl_pct), tp=entry * (1 + self.tp_pct))
-            elif self.rsi[-1] > self.overbought and not self.position.is_short:
-                self.position.close()
-                self.sell(size=_size, sl=entry * (1 + self.sl_pct), tp=entry * (1 - self.tp_pct))
-
+    RSIStrategy.period     = params["period"]
+    RSIStrategy.oversold   = params["oversold"]
+    RSIStrategy.overbought = params["overbought"]
+    RSIStrategy.sl_pct     = params["sl_pct"]
+    RSIStrategy.tp_pct     = params["tp_pct"]
+    RSIStrategy._size      = size
     return RSIStrategy
