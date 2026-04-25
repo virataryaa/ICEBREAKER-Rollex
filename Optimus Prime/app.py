@@ -10,6 +10,10 @@ import plotly.express as px
 import pyarrow.parquet as pq
 import streamlit as st
 import streamlit.components.v1 as components
+import multiprocessing.pool as _mp_pool
+import backtesting.backtesting as _bbt
+_bbt.Pool = _mp_pool.ThreadPool
+
 from backtesting import Backtest
 from pathlib import Path
 
