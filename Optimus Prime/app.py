@@ -10,10 +10,6 @@ import plotly.express as px
 import pyarrow.parquet as pq
 import streamlit as st
 import streamlit.components.v1 as components
-import multiprocessing.pool as _mp_pool
-import backtesting.backtesting as _bbt
-_bbt.Pool = _mp_pool.ThreadPool
-
 from backtesting import Backtest
 from pathlib import Path
 
@@ -24,6 +20,47 @@ DB_DIR  = APP_DIR.parent / "Database"
 
 def _negate_metric(stats, key):
     return -stats[key]
+
+
+def _optimize(bt, param_ranges, maximize_fn, max_tries, constraint, random_state=42):
+    """Sequential grid search — avoids multiprocessing pickling issues on Streamlit Cloud."""
+    import itertools, random, math
+
+    keys  = list(param_ranges.keys())
+    lists = [list(v) if (hasattr(v, '__iter__') and not isinstance(v, str)) else [v]
+             for v in param_ranges.values()]
+    combos = list(itertools.product(*lists))
+
+    if len(combos) > max_tries:
+        combos = random.Random(random_state).sample(combos, max_tries)
+
+    best_stats, best_score, records = None, None, []
+
+    for combo in combos:
+        params = dict(zip(keys, combo))
+        if constraint is not None:
+            try:
+                if not constraint(pd.Series(params)):
+                    continue
+            except Exception:
+                continue
+        try:
+            stats = bt.run(**params)
+            score = maximize_fn(stats) if callable(maximize_fn) else stats[maximize_fn]
+            if not math.isfinite(score):
+                continue
+            records.append((*combo, score))
+            if best_score is None or score > best_score:
+                best_score, best_stats = score, stats
+        except Exception:
+            continue
+
+    if not records or best_stats is None:
+        return None, pd.Series(dtype=float)
+
+    idx     = pd.MultiIndex.from_tuples([r[:-1] for r in records], names=keys)
+    heatmap = pd.Series([r[-1] for r in records], index=idx)
+    return best_stats, heatmap
 
 OPTIMIZE_METRICS = {
     "Sharpe Ratio":       ("Sharpe Ratio",        False),
@@ -241,13 +278,11 @@ with tab2:
             label = f"Sampling {int(max_tries):,} of {total_combos:,} combinations..." if sampling else f"Running all {total_combos:,} combinations..."
 
             with st.spinner(label):
-                constraint = opt_cfg.get("constraint")
-                kwargs = dict(maximize=maximize_fn, return_heatmap=True,
-                              max_tries=int(max_tries), random_state=42,
-                              **opt_cfg["ranges"])
-                if constraint:
-                    kwargs["constraint"] = constraint
-                best_stats, heatmap = bt_opt.optimize(**kwargs)
+                constraint  = opt_cfg.get("constraint")
+                best_stats, heatmap = _optimize(
+                    bt_opt, opt_cfg["ranges"], maximize_fn,
+                    int(max_tries), constraint,
+                )
 
             # ── BEST PARAMS ───────────────────────────────────────────────────
             st.subheader("Best Result")
