@@ -15,6 +15,25 @@ from pathlib import Path
 
 st.set_page_config(page_title="Optimus Prime", layout="wide")
 
+st.markdown("""
+<style>
+[data-testid="stAppViewContainer"] {
+    background:
+        radial-gradient(ellipse 70% 60% at 20% 80%, rgba(26,74,90,.50) 0%, transparent 65%),
+        radial-gradient(ellipse 60% 50% at 80% 20%, rgba(42,85,104,.45) 0%, transparent 60%),
+        radial-gradient(ellipse 80% 70% at 50% 30%, rgba(79,176,200,.10) 0%, transparent 55%),
+        #0D1620;
+    background-attachment: fixed;
+}
+[data-testid="stHeader"] {
+    background: rgba(13,22,32,.85) !important;
+    backdrop-filter: saturate(180%) blur(16px);
+    -webkit-backdrop-filter: saturate(180%) blur(16px);
+    border-bottom: 1px solid rgba(188,212,222,.14);
+}
+</style>
+""", unsafe_allow_html=True)
+
 APP_DIR = Path(__file__).parent
 DB_DIR  = APP_DIR.parent / "Database"
 
