@@ -42,15 +42,66 @@ def _negate_metric(stats, key):
 
 
 def _optimize(bt, param_ranges, maximize_fn, max_tries, constraint, random_state=42, _progress=None):
-    """Sequential grid search with progress callback. Multiprocessing is intentionally
-    avoided — bt.optimize() spawns subprocesses that re-import the Streamlit app and crash."""
     import itertools, random, math
 
     keys  = list(param_ranges.keys())
     lists = [list(v) if (hasattr(v, '__iter__') and not isinstance(v, str)) else [v]
              for v in param_ranges.values()]
-    combos = list(itertools.product(*lists))
 
+    # ── Optuna TPE sampler (smart Bayesian search) ────────────────────────────
+    try:
+        import optuna
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+        _counter = [0]
+
+        def _objective(trial):
+            params = {k: trial.suggest_categorical(k, l) for k, l in zip(keys, lists)}
+            if constraint is not None:
+                try:
+                    if not constraint(pd.Series(params)):
+                        raise optuna.TrialPruned()
+                except optuna.TrialPruned:
+                    raise
+                except Exception:
+                    raise optuna.TrialPruned()
+            try:
+                stats = bt.run(**params)
+                score = maximize_fn(stats) if callable(maximize_fn) else stats[maximize_fn]
+                if not math.isfinite(score):
+                    raise optuna.TrialPruned()
+                return score
+            except optuna.TrialPruned:
+                raise
+            except Exception:
+                raise optuna.TrialPruned()
+
+        def _cb(study, trial):
+            _counter[0] += 1
+            if _progress:
+                _progress(_counter[0], max_tries)
+
+        study = optuna.create_study(
+            direction="maximize",
+            sampler=optuna.samplers.TPESampler(seed=random_state),
+        )
+        study.optimize(_objective, n_trials=max_tries, callbacks=[_cb], show_progress_bar=False)
+
+        completed = [t for t in study.trials if t.value is not None]
+        if not completed:
+            return None, pd.Series(dtype=float)
+
+        best_stats = bt.run(**study.best_params)
+        records    = [tuple(t.params[k] for k in keys) + (t.value,) for t in completed]
+        idx        = pd.MultiIndex.from_tuples([r[:-1] for r in records], names=keys)
+        heatmap    = pd.Series([r[-1] for r in records], index=idx)
+        return best_stats, heatmap
+
+    except ImportError:
+        pass  # optuna not installed — fall through to sequential
+
+    # ── Sequential fallback with progress bar ─────────────────────────────────
+    combos = list(itertools.product(*lists))
     if len(combos) > max_tries:
         combos = random.Random(random_state).sample(combos, max_tries)
 
