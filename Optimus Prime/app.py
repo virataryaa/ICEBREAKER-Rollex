@@ -42,30 +42,15 @@ def _negate_metric(stats, key):
 
 
 def _optimize(bt, param_ranges, maximize_fn, max_tries, constraint, random_state=42, _progress=None):
+    """Sequential grid search with progress callback. Multiprocessing is intentionally
+    avoided — bt.optimize() spawns subprocesses that re-import the Streamlit app and crash."""
     import itertools, random, math
 
     keys  = list(param_ranges.keys())
     lists = [list(v) if (hasattr(v, '__iter__') and not isinstance(v, str)) else [v]
              for v in param_ranges.values()]
-
-    # ── Parallel path: use backtesting.py's built-in joblib optimizer ─────────
-    try:
-        out = bt.optimize(
-            **{k: l for k, l in zip(keys, lists)},
-            maximize=maximize_fn,
-            constraint=constraint,
-            max_tries=max_tries,
-            random_state=random_state,
-            return_heatmap=True,
-        )
-        best_stats = out[0] if isinstance(out, tuple) else out
-        heatmap    = out[1] if isinstance(out, tuple) else pd.Series(dtype=float)
-        return best_stats, heatmap
-    except Exception:
-        pass  # fall through to sequential
-
-    # ── Sequential fallback with progress bar ─────────────────────────────────
     combos = list(itertools.product(*lists))
+
     if len(combos) > max_tries:
         combos = random.Random(random_state).sample(combos, max_tries)
 
