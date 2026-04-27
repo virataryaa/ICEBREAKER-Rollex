@@ -41,21 +41,40 @@ def _negate_metric(stats, key):
     return -stats[key]
 
 
-def _optimize(bt, param_ranges, maximize_fn, max_tries, constraint, random_state=42):
-    """Sequential grid search — avoids multiprocessing pickling issues on Streamlit Cloud."""
+def _optimize(bt, param_ranges, maximize_fn, max_tries, constraint, random_state=42, _progress=None):
     import itertools, random, math
 
     keys  = list(param_ranges.keys())
     lists = [list(v) if (hasattr(v, '__iter__') and not isinstance(v, str)) else [v]
              for v in param_ranges.values()]
-    combos = list(itertools.product(*lists))
 
+    # ── Parallel path: use backtesting.py's built-in joblib optimizer ─────────
+    try:
+        out = bt.optimize(
+            **{k: l for k, l in zip(keys, lists)},
+            maximize=maximize_fn,
+            constraint=constraint,
+            max_tries=max_tries,
+            random_state=random_state,
+            return_heatmap=True,
+        )
+        best_stats = out[0] if isinstance(out, tuple) else out
+        heatmap    = out[1] if isinstance(out, tuple) else pd.Series(dtype=float)
+        return best_stats, heatmap
+    except Exception:
+        pass  # fall through to sequential
+
+    # ── Sequential fallback with progress bar ─────────────────────────────────
+    combos = list(itertools.product(*lists))
     if len(combos) > max_tries:
         combos = random.Random(random_state).sample(combos, max_tries)
 
     best_stats, best_score, records = None, None, []
+    n = len(combos)
 
-    for combo in combos:
+    for i, combo in enumerate(combos):
+        if _progress:
+            _progress(i + 1, n)
         params = dict(zip(keys, combo))
         if constraint is not None:
             try:
@@ -73,6 +92,9 @@ def _optimize(bt, param_ranges, maximize_fn, max_tries, constraint, random_state
                 best_score, best_stats = score, stats
         except Exception:
             continue
+
+    if _progress:
+        _progress(n, n)
 
     if not records or best_stats is None:
         return None, pd.Series(dtype=float)
@@ -296,12 +318,21 @@ with tab2:
             sampling = int(max_tries) < total_combos
             label = f"Sampling {int(max_tries):,} of {total_combos:,} combinations..." if sampling else f"Running all {total_combos:,} combinations..."
 
+            _prog = st.progress(0, text="Starting optimizer...")
+
+            def _progress_cb(done, total):
+                _prog.progress(done / total,
+                               text=f"{done:,} / {total:,} combinations evaluated")
+
             with st.spinner(label):
                 constraint  = opt_cfg.get("constraint")
                 best_stats, heatmap = _optimize(
                     bt_opt, opt_cfg["ranges"], maximize_fn,
                     int(max_tries), constraint,
+                    _progress=_progress_cb,
                 )
+
+            _prog.empty()
 
             # ── BEST PARAMS ───────────────────────────────────────────────────
             st.subheader("Best Result")
