@@ -338,12 +338,25 @@ with tab1:
 
         trades = stats["_trades"]
 
-        m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("Starting Capital",   f"${cash:,.0f}")
-        m2.metric("Margin / Contract",  f"${margin_per_contract:,.0f}")
-        m3.metric("Commission",         f"{commission_pct:.2f}%")
-        m4.metric("Position Size",      f"{size_pct:.0f}%")
-        m5.metric("Est. Contracts",     f"~{int(size * cash / margin_per_contract)}")
+        _kpis = [
+            ("Starting Capital",  f"${cash:,.0f}"),
+            ("Margin / Contract", f"${margin_per_contract:,.0f}"),
+            ("Commission",        f"{commission_pct:.2f}%"),
+            ("Position Size",     f"{size_pct:.0f}%"),
+            ("Est. Contracts",    f"~{int(size * cash / margin_per_contract)}"),
+        ]
+        st.markdown(
+            "<div style='display:flex;gap:8px;margin-bottom:12px;'>" +
+            "".join(
+                f"<div style='flex:1;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);"
+                f"border-radius:6px;padding:6px 10px;'>"
+                f"<div style='font-size:0.62rem;color:#6a8a96;margin-bottom:2px;'>{label}</div>"
+                f"<div style='font-size:0.78rem;color:#cde;font-weight:600;'>{val}</div>"
+                f"</div>"
+                for label, val in _kpis
+            ) + "</div>",
+            unsafe_allow_html=True,
+        )
 
         st.subheader("Performance Summary")
         stats_tables(stats)
