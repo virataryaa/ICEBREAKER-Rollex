@@ -338,6 +338,13 @@ with tab1:
 
         trades = stats["_trades"]
 
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Starting Capital",   f"${cash:,.0f}")
+        m2.metric("Margin / Contract",  f"${margin_per_contract:,.0f}")
+        m3.metric("Commission",         f"{commission_pct:.2f}%")
+        m4.metric("Position Size",      f"{size_pct:.0f}%")
+        m5.metric("Est. Contracts",     f"~{int(size * cash / margin_per_contract)}")
+
         st.subheader("Performance Summary")
         stats_tables(stats)
         st.divider()
