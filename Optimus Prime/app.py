@@ -263,16 +263,8 @@ with st.sidebar:
     st.divider()
     st.subheader("Configure Engine")
     _spec0              = get_spec(commodity)
-    st.markdown(
-        '<p style="font-size:0.875rem;font-weight:600;margin-bottom:-14px;">'
-        'Starting Capital ($) '
-        '<span style="font-size:0.68rem;font-style:italic;font-weight:400;color:#7a9aaa;">margin basis</span>'
-        '</p>',
-        unsafe_allow_html=True,
-    )
-    cash = st.number_input("Starting Capital ($)", value=_spec0["margin_usd"] * 10,
-                           step=5_000, min_value=1_000, key=f"cash_{commodity}",
-                           label_visibility="collapsed")
+    cash = st.number_input("Starting Capital ($) — margin basis", value=_spec0["margin_usd"] * 10,
+                           step=5_000, min_value=1_000, key=f"cash_{commodity}")
     margin_per_contract = st.number_input("Margin per contract ($)", value=_spec0["margin_usd"],
                                           step=100, min_value=100, key=f"margin_{commodity}")
     commission_pct = st.number_input("Commission (%)", value=0.20, step=0.05, format="%.2f", min_value=0.0)
