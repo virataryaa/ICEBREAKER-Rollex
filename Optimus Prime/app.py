@@ -285,7 +285,7 @@ spec          = get_spec(commodity)
 avg_px        = df_full["Close"].mean()               # already scaled by point_value
 margin_ratio  = margin_per_contract / avg_px          # fraction passed to Backtest(margin=...)
 buying_power  = cash / margin_ratio
-est_contracts = max(0, int(size * buying_power / avg_px))
+est_contracts = max(0, int(size * cash / margin_per_contract))
 spec_info.markdown(
     f"""<div style="background:rgba(79,176,200,.08);border:1px solid rgba(79,176,200,.18);
         border-radius:6px;padding:8px 12px;margin-top:2px;font-size:0.76rem;line-height:1.7;color:#8cb8c8;">
