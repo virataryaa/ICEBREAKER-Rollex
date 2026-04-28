@@ -37,6 +37,25 @@ st.markdown("""
 APP_DIR = Path(__file__).parent
 DB_DIR  = APP_DIR.parent / "Database"
 
+# ── FUTURES CONTRACT SPECS ────────────────────────────────────────────────────
+# point_value : USD per 1-unit move in the quoted price
+# margin_usd  : approximate exchange initial margin per contract (USD)
+COMMODITY_SPECS = {
+    "KC":  {"name": "Arabica Coffee", "exchange": "ICE US", "contract": "37,500 lbs",  "unit": "¢/lb",  "point_value": 375,  "margin_usd": 3_500},
+    "CC":  {"name": "Cocoa",          "exchange": "ICE US", "contract": "10 MT",        "unit": "$/MT",  "point_value": 10,   "margin_usd": 1_500},
+    "CT":  {"name": "Cotton #2",      "exchange": "ICE US", "contract": "50,000 lbs",   "unit": "¢/lb",  "point_value": 500,  "margin_usd": 2_000},
+    "SB":  {"name": "Sugar #11",      "exchange": "ICE US", "contract": "112,000 lbs",  "unit": "¢/lb",  "point_value": 1_120,"margin_usd": 1_000},
+    "OJ":  {"name": "Orange Juice",   "exchange": "ICE US", "contract": "15,000 lbs",   "unit": "¢/lb",  "point_value": 150,  "margin_usd": 1_500},
+    "RC":  {"name": "Robusta Coffee", "exchange": "ICE EU", "contract": "10 MT",        "unit": "$/MT",  "point_value": 10,   "margin_usd": 1_500},
+    "LCC": {"name": "London Cocoa",   "exchange": "ICE EU", "contract": "10 MT",        "unit": "£/MT",  "point_value": 10,   "margin_usd": 1_000},
+    "LSU": {"name": "White Sugar",    "exchange": "ICE EU", "contract": "50 MT",        "unit": "$/MT",  "point_value": 50,   "margin_usd": 1_000},
+}
+_DEFAULT_SPEC = {"name": "Unknown", "exchange": "–", "contract": "–", "unit": "pts",
+                 "point_value": 1, "margin_usd": 5_000}
+
+def get_spec(commodity: str) -> dict:
+    return COMMODITY_SPECS.get(commodity.upper(), _DEFAULT_SPEC)
+
 def _negate_metric(stats, key):
     return -stats[key]
 
@@ -181,6 +200,7 @@ COMMODITIES = get_commodities()
 # ── DATA LOADER ───────────────────────────────────────────────────────────────
 @st.cache_data
 def load_data(commodity):
+    spec = get_spec(commodity)
     df = pd.read_parquet(DB_DIR / f"rollex_{commodity}.parquet")
     df = df.rename(columns={
         "rollex_open": "Open",
@@ -188,7 +208,13 @@ def load_data(commodity):
         "rollex_low":  "Low",
         "rollex_px":   "Close",
     })
-    return df[["Open", "High", "Low", "Close"]].dropna()
+    df = df[["Open", "High", "Low", "Close"]].dropna()
+    # Scale prices by point_value so that 1 backtesting unit = 1 real contract
+    # and all P&L figures are in true USD (or native currency for LCC).
+    pv = spec["point_value"]
+    if pv != 1:
+        df[["Open", "High", "Low", "Close"]] *= pv
+    return df
 
 # ── HELPERS ───────────────────────────────────────────────────────────────────
 def stats_tables(stats):
@@ -236,14 +262,30 @@ with st.sidebar:
 
     st.divider()
     st.subheader("Engine")
-    cash       = st.number_input("Starting Cash ($)", value=10_000, step=1_000, min_value=1_000)
-    commission = st.number_input("Commission", value=0.002, step=0.001, format="%.3f", min_value=0.0)
-    size       = st.number_input("Trade Size (fraction of equity)", min_value=0.01, max_value=1.0, value=0.95, step=0.05, format="%.2f")
+    _spec0     = get_spec(commodity)
+    cash       = st.number_input("Margin Capital ($)", value=_spec0["margin_usd"] * 10,
+                                  step=5_000, min_value=1_000, key=f"cash_{commodity}")
+    spec_info  = st.empty()   # filled after data loads
+    commission = st.number_input("Commission", value=0.0001, step=0.00005, format="%.5f", min_value=0.0)
+    size       = st.number_input("Position Size (fraction of buying power)", min_value=0.01, max_value=1.0,
+                                  value=0.20, step=0.05, format="%.2f")
 
 # ── LOAD DATA ─────────────────────────────────────────────────────────────────
 df_full = load_data(commodity)
 min_date = df_full.index.min().date()
 max_date = df_full.index.max().date()
+
+# ── COMMODITY SPEC + MARGIN ───────────────────────────────────────────────────
+spec          = get_spec(commodity)
+avg_px        = df_full["Close"].mean()          # already scaled by point_value
+margin_ratio  = spec["margin_usd"] / avg_px      # fraction passed to Backtest(margin=...)
+buying_power  = cash / margin_ratio
+est_contracts = max(0, int(size * buying_power / avg_px))
+spec_info.caption(
+    f"{spec['name']}  ·  {spec['exchange']}  ·  {spec['contract']}  ·  {spec['unit']}  \n"
+    f"**${spec['point_value']:,}** per point  ·  **${spec['margin_usd']:,}** margin / contract  \n"
+    f"At these settings: **~{est_contracts} contracts**"
+)
 
 # ── TABS ──────────────────────────────────────────────────────────────────────
 tab1, tab2 = st.tabs(["Backtest", "Optimize"])
@@ -279,7 +321,8 @@ with tab1:
 
         with st.spinner("Running..."):
             StrategyClass = mod.build(params, size=size)
-            bt    = Backtest(df, StrategyClass, cash=cash, commission=commission, exclusive_orders=True)
+            bt    = Backtest(df, StrategyClass, cash=cash, commission=commission,
+                             margin=margin_ratio, exclusive_orders=True)
             stats = bt.run()
 
         trades = stats["_trades"]
@@ -346,7 +389,8 @@ with tab2:
                  for k, v in opt_cfg["ranges"].items()},
                 size=size
             )
-            bt_opt = Backtest(df_opt, StrategyClass, cash=cash, commission=commission, exclusive_orders=True)
+            bt_opt = Backtest(df_opt, StrategyClass, cash=cash, commission=commission,
+                              margin=margin_ratio, exclusive_orders=True)
 
             total_combos = 1
             for v in opt_cfg["ranges"].values():
