@@ -261,7 +261,7 @@ with st.sidebar:
     mod           = STRATEGIES[strategy_name]
 
     st.divider()
-    st.subheader("Engine")
+    st.subheader("Configure Engine")
     _spec0              = get_spec(commodity)
     cash                = st.number_input("Margin Capital ($)", value=_spec0["margin_usd"] * 10,
                                           step=5_000, min_value=1_000, key=f"cash_{commodity}")
