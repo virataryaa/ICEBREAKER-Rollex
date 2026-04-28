@@ -262,13 +262,15 @@ with st.sidebar:
 
     st.divider()
     st.subheader("Engine")
-    _spec0     = get_spec(commodity)
-    cash       = st.number_input("Margin Capital ($)", value=_spec0["margin_usd"] * 10,
-                                  step=5_000, min_value=1_000, key=f"cash_{commodity}")
-    spec_info  = st.empty()   # filled after data loads
-    commission = st.number_input("Commission", value=0.0001, step=0.00005, format="%.5f", min_value=0.0)
-    size       = st.number_input("Position Size (fraction of buying power)", min_value=0.01, max_value=1.0,
-                                  value=0.20, step=0.05, format="%.2f")
+    _spec0              = get_spec(commodity)
+    cash                = st.number_input("Margin Capital ($)", value=_spec0["margin_usd"] * 10,
+                                          step=5_000, min_value=1_000, key=f"cash_{commodity}")
+    margin_per_contract = st.number_input("Margin per contract ($)", value=_spec0["margin_usd"],
+                                          step=100, min_value=100, key=f"margin_{commodity}")
+    spec_info           = st.empty()   # filled after data loads
+    commission          = st.number_input("Commission", value=0.0001, step=0.00005, format="%.5f", min_value=0.0)
+    size                = st.number_input("Position Size (fraction of buying power)", min_value=0.01, max_value=1.0,
+                                          value=0.20, step=0.05, format="%.2f")
 
 # ── LOAD DATA ─────────────────────────────────────────────────────────────────
 df_full = load_data(commodity)
@@ -277,13 +279,13 @@ max_date = df_full.index.max().date()
 
 # ── COMMODITY SPEC + MARGIN ───────────────────────────────────────────────────
 spec          = get_spec(commodity)
-avg_px        = df_full["Close"].mean()          # already scaled by point_value
-margin_ratio  = spec["margin_usd"] / avg_px      # fraction passed to Backtest(margin=...)
+avg_px        = df_full["Close"].mean()               # already scaled by point_value
+margin_ratio  = margin_per_contract / avg_px          # fraction passed to Backtest(margin=...)
 buying_power  = cash / margin_ratio
 est_contracts = max(0, int(size * buying_power / avg_px))
 spec_info.caption(
     f"{spec['name']}  ·  {spec['exchange']}  ·  {spec['contract']}  ·  {spec['unit']}  \n"
-    f"**${spec['point_value']:,}** per point  ·  **${spec['margin_usd']:,}** margin / contract  \n"
+    f"**${spec['point_value']:,}** per point  ·  **${margin_per_contract:,}** margin / contract  \n"
     f"At these settings: **~{est_contracts} contracts**"
 )
 
