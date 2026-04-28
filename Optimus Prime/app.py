@@ -283,10 +283,16 @@ avg_px        = df_full["Close"].mean()               # already scaled by point_
 margin_ratio  = margin_per_contract / avg_px          # fraction passed to Backtest(margin=...)
 buying_power  = cash / margin_ratio
 est_contracts = max(0, int(size * buying_power / avg_px))
-spec_info.caption(
-    f"{spec['name']}  ·  {spec['exchange']}  ·  {spec['contract']}  ·  {spec['unit']}  \n"
-    f"**${spec['point_value']:,}** per point  ·  **${margin_per_contract:,}** margin / contract  \n"
-    f"At these settings: **~{est_contracts} contracts**"
+spec_info.markdown(
+    f"""<div style="background:rgba(79,176,200,.08);border:1px solid rgba(79,176,200,.18);
+        border-radius:6px;padding:8px 12px;margin-top:2px;font-size:0.76rem;line-height:1.7;color:#8cb8c8;">
+      <div>{spec['name']} &nbsp;·&nbsp; {spec['exchange']} &nbsp;·&nbsp; {spec['contract']} &nbsp;·&nbsp; {spec['unit']}</div>
+      <div><span style="color:#bde;font-weight:600;">${spec['point_value']:,}</span> per point
+           &nbsp;·&nbsp;
+           <span style="color:#bde;font-weight:600;">${margin_per_contract:,}</span> margin / contract</div>
+      <div style="color:#4fb0c8;font-weight:600;margin-top:2px;">~ {est_contracts} contracts at these settings</div>
+    </div>""",
+    unsafe_allow_html=True,
 )
 
 # ── TABS ──────────────────────────────────────────────────────────────────────
