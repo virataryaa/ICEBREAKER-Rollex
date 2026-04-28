@@ -265,8 +265,8 @@ with st.sidebar:
     _spec0              = get_spec(commodity)
     st.markdown(
         '<p style="font-size:0.875rem;font-weight:600;margin-bottom:-14px;">'
-        'Starting Capital ($)<br>'
-        '<span style="font-size:0.70rem;font-style:italic;font-weight:400;color:#7a9aaa;">Margin basis</span>'
+        'Starting Capital ($) '
+        '<span style="font-size:0.68rem;font-style:italic;font-weight:400;color:#7a9aaa;">margin basis</span>'
         '</p>',
         unsafe_allow_html=True,
     )
