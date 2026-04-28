@@ -268,9 +268,12 @@ with st.sidebar:
     margin_per_contract = st.number_input("Margin per contract ($)", value=_spec0["margin_usd"],
                                           step=100, min_value=100, key=f"margin_{commodity}")
     spec_info           = st.empty()   # filled after data loads
-    commission          = st.number_input("Commission", value=0.0001, step=0.00005, format="%.5f", min_value=0.0)
-    size                = st.number_input("Position Size (fraction of buying power)", min_value=0.01, max_value=1.0,
-                                          value=0.20, step=0.05, format="%.2f")
+    commission_pct = st.number_input("Commission (%)", value=0.20, step=0.05, format="%.2f", min_value=0.0)
+    size_pct       = st.number_input("Position Size (%)", value=20.0, step=5.0, format="%.0f",
+                                     min_value=1.0, max_value=100.0)
+
+commission = commission_pct / 100
+size       = size_pct / 100
 
 # ── LOAD DATA ─────────────────────────────────────────────────────────────────
 df_full = load_data(commodity)
