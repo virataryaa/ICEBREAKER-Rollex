@@ -32,7 +32,7 @@ DB_DIR   = CODE_DIR.parent / "Database"
 DB_DIR.mkdir(exist_ok=True)
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
-OFFSET     = 30           # trading days before LTD to switch c1 -> c2
+OFFSET     = 15           # trading days before LTD to switch c1 -> c2
 START_DATE = "2010-01-01"
 START_YEAR = 2009
 
@@ -242,16 +242,44 @@ def fetch_ohlc(symbol, start, end):
         for col in ['Open', 'High', 'Low', 'settlement']:
             df[col] = pd.to_numeric(df[col], errors='coerce')
         return df[df['settlement'].notna() & (df['settlement'] > 0)]
-    except:
+    except Exception as e:
+        print(f"  ERROR fetching {symbol}: {e}")
         return pd.DataFrame(columns=['Open', 'High', 'Low', 'settlement'])
 
 # ── EXPIRY DATES ──────────────────────────────────────────────────────────────
 
-def get_expiry_dates(engine_key):
+def get_contract_windows(engine_key):
+    """Return regime B windows and switch dates aligned to when ICE rolls its % continuous.
+
+    Non-after_ltd (KC, CC, CT, RC, LSU):
+      - ICE rolls %c1 at FND. Bridge return = c1[FND] / c2[FND-1].
+      - switch_date = FND - 1 bday  (so the cross-return fires on FND)
+      - regime B = [FND - OFFSET bdays, FND - 1 bday]  (c2 tracking before ICE rolls)
+      - After FND: regime A, c1 = new front. Anchor = c1 = new front price. ✓
+
+    after_ltd (SB, LCC):
+      - ICE rolls at LTD. Switch and regime B end at LTD (original behaviour).
+    """
     end_year = pd.Timestamp.today().year + 1
-    ct = generate_contract_table(engine_key, START_YEAR, end_year)
-    ltds = pd.to_datetime(ct["LTD"]).dt.normalize().drop_duplicates().sort_values()
-    return pd.DatetimeIndex(ltds)
+    ct   = generate_contract_table(engine_key, START_YEAR, end_year)
+    ct["LTD"] = pd.to_datetime(ct["LTD"]).dt.normalize()
+    ct["FND"] = pd.to_datetime(ct["FND"]).dt.normalize()
+    cfg  = COMMODITY_CONFIG[engine_key]
+    bday = BDAY_CAL[cfg.calendar]
+
+    switch_dates, windows = [], []
+    for _, row in ct.iterrows():
+        ltd, fnd = row["LTD"], row["FND"]
+        if cfg.fnd_rule == "after_ltd":
+            switch = ltd
+            windows.append(((ltd - OFFSET * bday).normalize(), ltd))
+        else:
+            switch = (fnd - 1 * bday).normalize()
+            windows.append(((fnd - OFFSET * bday).normalize(), switch))
+        switch_dates.append(switch)
+
+    switch_idx = pd.DatetimeIndex(sorted(set(switch_dates)))
+    return windows, switch_idx
 
 # ── ROLL LOGIC ────────────────────────────────────────────────────────────────
 
@@ -260,16 +288,27 @@ MONTH_NAMES = {1:"Jan",2:"Feb",3:"Mar",4:"Apr",5:"May",6:"Jun",
 
 def build_tags(dates, regime_a, engine_key):
     end_year = pd.Timestamp.today().year + 1
-    ct = generate_contract_table(engine_key, START_YEAR, end_year)
+    ct  = generate_contract_table(engine_key, START_YEAR, end_year)
     ct["LTD"] = pd.to_datetime(ct["LTD"]).dt.normalize()
     ct["FND"] = pd.to_datetime(ct["FND"]).dt.normalize()
-    ct = ct.sort_values("LTD").reset_index(drop=True)
-    ltd_arr = ct["LTD"].values
+    ct  = ct.sort_values("LTD").reset_index(drop=True)
+    cfg = COMMODITY_CONFIG[engine_key]
+    bday = BDAY_CAL[cfg.calendar]
+
+    # Build switch_dates aligned to get_contract_windows so labels match prices
+    switch_dates = []
+    for _, row in ct.iterrows():
+        if cfg.fnd_rule == "after_ltd":
+            switch_dates.append(row["LTD"])
+        else:
+            switch_dates.append((row["FND"] - 1 * bday).normalize())
+    switch_arr = np.array([np.datetime64(s) for s in switch_dates])
 
     rows = []
     for d, is_A in zip(dates, regime_a):
-        d_np   = np.datetime64(pd.Timestamp(d).normalize())
-        c1_idx = int(np.searchsorted(ltd_arr, d_np, side="left"))
+        d_np = np.datetime64(pd.Timestamp(d).normalize())
+        # Count how many switches have already passed → tells us which contract we're on
+        c1_idx = int(np.searchsorted(switch_arr, d_np, side="right"))
         target = c1_idx if is_A else c1_idx + 1
         if target >= len(ct):
             target = len(ct) - 1
@@ -284,7 +323,7 @@ def build_tags(dates, regime_a, engine_key):
     return pd.DataFrame(rows, index=pd.DatetimeIndex(dates))
 
 
-def build_rollex(comm, c1_df, c2_df, expiry_dates):
+def build_rollex(comm, c1_df, c2_df, expiry_dates, regime_windows):
     df = pd.concat([
         c1_df["settlement"].rename("c1"),
         c2_df["settlement"].rename("c2"),
@@ -309,16 +348,16 @@ def build_rollex(comm, c1_df, c2_df, expiry_dates):
 
     switch_flag, regime_A, regime_B = [], [], []
     for i, d in enumerate(dates):
+        d_ts   = pd.Timestamp(d)
         is_exp = d in exp_set
         if not is_exp and i > 0:
             prev   = dates[i - 1]
             is_exp = any(prev < e <= d for e in exp_set)
         switch_flag.append(1 if is_exp else 0)
 
-        window_end = dates[min(i + OFFSET - 1, n - 1)]
-        has_expiry = any(d <= e <= window_end for e in exp_set)
-        regime_A.append(0 if has_expiry else 1)
-        regime_B.append(1 if has_expiry else 0)
+        in_regime_b = any(start <= d_ts <= end for start, end in regime_windows)
+        regime_A.append(0 if in_regime_b else 1)
+        regime_B.append(1 if in_regime_b else 0)
 
     df["switch"] = switch_flag
     df["A"]      = regime_A
@@ -370,100 +409,101 @@ def build_rollex(comm, c1_df, c2_df, expiry_dates):
 
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--full", action="store_true")
-parser.add_argument("--commodity", type=str, default=None, help="Run single commodity e.g. KC")
-args        = parser.parse_args()
-INCREMENTAL = not args.full
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--full", action="store_true")
+    parser.add_argument("--commodity", type=str, default=None, help="Run single commodity e.g. KC")
+    args        = parser.parse_args()
+    INCREMENTAL = not args.full
 
-if args.commodity:
-    COMMODITIES = {k: v for k, v in COMMODITIES.items() if k == args.commodity.upper()}
+    if args.commodity:
+        COMMODITIES = {k: v for k, v in COMMODITIES.items() if k == args.commodity.upper()}
 
-END_DATE = pd.Timestamp.today().strftime("%Y-%m-%d")
-results  = {}
+    END_DATE = pd.Timestamp.today().strftime("%Y-%m-%d")
+    results  = {}
 
-for comm, cfg in COMMODITIES.items():
-    print(f"\n{'='*55}")
-    print(f"  {comm}  ({cfg['c1']} / {cfg['c2']})")
-    print(f"{'='*55}")
+    for comm, cfg in COMMODITIES.items():
+        print(f"\n{'='*55}")
+        print(f"  {comm}  ({cfg['c1']} / {cfg['c2']})")
+        print(f"{'='*55}")
 
-    expiries = get_expiry_dates(cfg["engine_key"])
-    print(f"  Expiries: {len(expiries)}  ({expiries.min().date()} -> {expiries.max().date()})")
+        regime_windows, expiries = get_contract_windows(cfg["engine_key"])
+        print(f"  Expiries: {len(expiries)}  ({expiries.min().date()} -> {expiries.max().date()})")
 
-    out_path = DB_DIR / f"rollex_{comm}.parquet"
-    if INCREMENTAL and out_path.exists():
-        existing    = pd.read_parquet(out_path)
-        latest      = existing.index.max()
-        fetch_start = (latest - pd.Timedelta(days=5)).strftime("%Y-%m-%d")
-        print(f"  Mode: INCREMENTAL from {fetch_start}")
-    else:
-        existing    = None
-        fetch_start = START_DATE
-        print(f"  Mode: FULL from {fetch_start}")
+        out_path = DB_DIR / f"rollex_{comm}.parquet"
+        if INCREMENTAL and out_path.exists():
+            existing    = pd.read_parquet(out_path)
+            latest      = existing.index.max()
+            fetch_start = (latest - pd.Timedelta(days=5)).strftime("%Y-%m-%d")
+            print(f"  Mode: INCREMENTAL from {fetch_start}")
+        else:
+            existing    = None
+            fetch_start = START_DATE
+            print(f"  Mode: FULL from {fetch_start}")
 
-    c1_df = c2_df = None
-    for label, sym in [("c1", cfg["c1"]), ("c2", cfg["c2"])]:
-        ohlc_cols = [f"{label}_open", f"{label}_high", f"{label}_low"]
-        try:
-            new_df = fetch_ohlc(sym, fetch_start, END_DATE)
-            if existing is not None:
-                if all(c in existing.columns for c in ohlc_cols):
-                    hist = existing[[label] + ohlc_cols].copy()
-                    hist.columns = ["settlement", "Open", "High", "Low"]
-                else:
-                    hist = existing[[label]].rename(columns={label: "settlement"})
-                    for col in ["Open", "High", "Low"]:
-                        hist[col] = np.nan
-                hist = hist[hist["settlement"] > 0]
-                new_df = pd.concat([hist, new_df])
-                new_df = new_df[~new_df.index.duplicated(keep="last")].sort_index()
-            print(f"  {sym}: {len(new_df)} rows  ({new_df.index.min().date()} -> {new_df.index.max().date()})")
-            if label == "c1":
-                c1_df = new_df
-            else:
-                c2_df = new_df
-        except Exception as e:
-            print(f"  ERROR fetching {sym}: {e}")
-            if existing is not None:
-                if all(c in existing.columns for c in ohlc_cols):
-                    hist = existing[[label] + ohlc_cols].copy()
-                    hist.columns = ["settlement", "Open", "High", "Low"]
-                else:
-                    hist = existing[[label]].rename(columns={label: "settlement"})
-                    for col in ["Open", "High", "Low"]:
-                        hist[col] = np.nan
-                hist = hist[hist["settlement"] > 0]
-                if not hist.empty:
-                    print(f"  Falling back to existing {label} ({len(hist)} rows)")
-                    if label == "c1":
-                        c1_df = hist
+        c1_df = c2_df = None
+        for label, sym in [("c1", cfg["c1"]), ("c2", cfg["c2"])]:
+            ohlc_cols = [f"{label}_open", f"{label}_high", f"{label}_low"]
+            try:
+                new_df = fetch_ohlc(sym, fetch_start, END_DATE)
+                if existing is not None:
+                    if all(c in existing.columns for c in ohlc_cols):
+                        hist = existing[[label] + ohlc_cols].copy()
+                        hist.columns = ["settlement", "Open", "High", "Low"]
                     else:
-                        c2_df = hist
+                        hist = existing[[label]].rename(columns={label: "settlement"})
+                        for col in ["Open", "High", "Low"]:
+                            hist[col] = np.nan
+                    hist = hist[hist["settlement"] > 0]
+                    new_df = pd.concat([hist, new_df])
+                    new_df = new_df[~new_df.index.duplicated(keep="last")].sort_index()
+                print(f"  {sym}: {len(new_df)} rows  ({new_df.index.min().date()} -> {new_df.index.max().date()})")
+                if label == "c1":
+                    c1_df = new_df
+                else:
+                    c2_df = new_df
+            except Exception as e:
+                print(f"  ERROR fetching {sym}: {e}")
+                if existing is not None:
+                    if all(c in existing.columns for c in ohlc_cols):
+                        hist = existing[[label] + ohlc_cols].copy()
+                        hist.columns = ["settlement", "Open", "High", "Low"]
+                    else:
+                        hist = existing[[label]].rename(columns={label: "settlement"})
+                        for col in ["Open", "High", "Low"]:
+                            hist[col] = np.nan
+                    hist = hist[hist["settlement"] > 0]
+                    if not hist.empty:
+                        print(f"  Falling back to existing {label} ({len(hist)} rows)")
+                        if label == "c1":
+                            c1_df = hist
+                        else:
+                            c2_df = hist
 
-    if c1_df is None or c2_df is None or c1_df.empty or c2_df.empty:
-        print(f"  Skipping {comm} — incomplete price data")
-        continue
+        if c1_df is None or c2_df is None or c1_df.empty or c2_df.empty:
+            print(f"  Skipping {comm} — incomplete price data")
+            continue
 
-    df_out = build_rollex(comm, c1_df, c2_df, expiries)
-    if df_out.empty:
-        continue
+        df_out = build_rollex(comm, c1_df, c2_df, expiries, regime_windows)
+        if df_out.empty:
+            continue
 
-    print(f"  Tagging active contracts...")
-    tags   = build_tags(df_out.index.tolist(), df_out["A"].tolist(), cfg["engine_key"])
-    df_out = pd.concat([df_out, tags], axis=1)
+        print(f"  Tagging active contracts...")
+        tags   = build_tags(df_out.index.tolist(), df_out["A"].tolist(), cfg["engine_key"])
+        df_out = pd.concat([df_out, tags], axis=1)
 
-    df_out.index.name = "Date"
-    df_out.to_parquet(out_path)
-    results[comm] = df_out
-    print(f"  Saved -> {out_path.name}  |  {len(df_out)} rows  |  "
-          f"Rollex Px: {df_out['rollex_px'].iat[-1]:.4f}  |  "
-          f"Active: {df_out['active_label'].iat[-1]}")
+        df_out.index.name = "Date"
+        df_out.to_parquet(out_path)
+        results[comm] = df_out
+        print(f"  Saved -> {out_path.name}  |  {len(df_out)} rows  |  "
+              f"Rollex Px: {df_out['rollex_px'].iat[-1]:.4f}  |  "
+              f"Active: {df_out['active_label'].iat[-1]}")
 
-print(f"\n{'='*55}")
-print(f"  DONE — {len(results)}/{len(COMMODITIES)} commodities built")
-print(f"{'='*55}")
-for comm, df in results.items():
-    print(f"  {comm:5s}  rows={len(df):5d}  "
-          f"from={df.index.min().date()}  to={df.index.max().date()}  "
-          f"rollex_px={df['rollex_px'].iat[-1]:.2f}  "
-          f"active={df['active_label'].iat[-1]}")
+    print(f"\n{'='*55}")
+    print(f"  DONE — {len(results)}/{len(COMMODITIES)} commodities built")
+    print(f"{'='*55}")
+    for comm, df in results.items():
+        print(f"  {comm:5s}  rows={len(df):5d}  "
+              f"from={df.index.min().date()}  to={df.index.max().date()}  "
+              f"rollex_px={df['rollex_px'].iat[-1]:.2f}  "
+              f"active={df['active_label'].iat[-1]}")
