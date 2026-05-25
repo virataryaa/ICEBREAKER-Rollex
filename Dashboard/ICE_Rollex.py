@@ -543,9 +543,3 @@ with tab_pv:
         "Dotted vertical lines mark contract roll dates (active contract change). "
         "Hover the price line to see the active contract month.")
 
-# ── Footer ────────────────────────────────────────────────────────────────────
-st.markdown("<hr>", unsafe_allow_html=True)
-st.caption(
-    f"Rollex Dashboard  |  ETG Softs  |  Source: ICE Connect  |  "
-    f"Roll offset: 20 trading days  |  "
-    f"Data as of {df.index.max().strftime('%d/%m/%Y')}")
