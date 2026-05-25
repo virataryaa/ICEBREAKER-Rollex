@@ -387,7 +387,7 @@ with tab_corr:
                     textposition="top right", textfont=dict(size=8, color="#FFD700"),
                     name="Latest"))
                 fig_sc1.update_layout(height=560,
-                    legend=dict(orientation="h", y=1.02, x=0, font=dict(size=8)),
+                    showlegend=False,
                     margin=dict(t=10, b=8, l=4, r=4),
                     xaxis=dict(showgrid=True, gridcolor="#f0f0f0",
                                tickfont=dict(size=9), title=f"{pair_a} ret %",
@@ -425,7 +425,7 @@ with tab_corr:
                     textposition="top right", textfont=dict(size=8, color="#FFD700"),
                     name="Latest"))
                 fig_sc2.update_layout(height=560,
-                    legend=dict(orientation="h", y=1.02, x=0, font=dict(size=8)),
+                    showlegend=False,
                     margin=dict(t=10, b=8, l=4, r=4),
                     xaxis=dict(showgrid=True, gridcolor="#f0f0f0",
                                tickfont=dict(size=9), title=f"{pair_a} price"),
@@ -437,6 +437,51 @@ with tab_corr:
             st.info("Not enough common dates for the selected pair and date range.")
     else:
         st.info("Select two different commodities above to see the correlation.")
+
+    # ── Full correlation matrix ───────────────────────────────────────────────
+    st.markdown("<hr>", unsafe_allow_html=True)
+    st.markdown(lbl("Return Correlation Matrix — All Commodities", NAVY),
+                unsafe_allow_html=True)
+
+    avail_comms = [c for c in AVAILABLE if c in all_data]
+    ret_matrix  = pd.DataFrame({
+        c: all_data[c].loc[str(date_range[0]):str(date_range[1])]["rollex_ret"]
+        for c in avail_comms
+    }).dropna()
+
+    corr_matrix = ret_matrix.corr()
+    labels      = [COMM_NAMES[c].split("—")[0].strip() for c in avail_comms]
+
+    z_mat  = corr_matrix.values.tolist()
+    t_mat  = [[f"<b>{v:.2f}</b>" if i == j else f"{v:.2f}"
+               for j, v in enumerate(row)]
+              for i, row in enumerate(z_mat)]
+
+    CORR_CS = [
+        [0.0,  "#c0392b"],
+        [0.45, "rgba(255,200,200,0.4)"],
+        [0.5,  "#f8f8f8"],
+        [0.55, "rgba(200,235,200,0.4)"],
+        [1.0,  "#0a2463"],
+    ]
+
+    fig_mat = go.Figure(go.Heatmap(
+        z=z_mat, x=labels, y=labels,
+        colorscale=CORR_CS, zmin=-1, zmax=1, zmid=0,
+        text=t_mat, texttemplate="%{text}",
+        textfont=dict(size=11),
+        hovertemplate="%{y} / %{x}: <b>%{z:.3f}</b><extra></extra>",
+        showscale=True,
+        colorbar=dict(thickness=12, len=0.8, tickfont=dict(size=9)),
+        xgap=2, ygap=2))
+
+    fig_mat.update_layout(
+        height=380,
+        margin=dict(t=10, b=8, l=4, r=4),
+        xaxis=dict(tickfont=dict(size=10), side="bottom", showgrid=False),
+        yaxis=dict(tickfont=dict(size=10), showgrid=False, autorange="reversed"),
+        **_D)
+    st.plotly_chart(fig_mat, use_container_width=True)
 
 
 # =============================================================================
