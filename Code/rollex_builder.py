@@ -32,7 +32,7 @@ DB_DIR   = CODE_DIR.parent / "Database"
 DB_DIR.mkdir(exist_ok=True)
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
-OFFSET     = 15           # trading days before LTD to switch c1 -> c2
+OFFSET     = 20           # trading days before LTD to switch c1 -> c2
 START_DATE = "2010-01-01"
 START_YEAR = 2009
 
@@ -251,14 +251,13 @@ def fetch_ohlc(symbol, start, end):
 def get_contract_windows(engine_key):
     """Return regime B windows and switch dates aligned to when ICE rolls its % continuous.
 
-    Non-after_ltd (KC, CC, CT, RC, LSU):
-      - ICE rolls %c1 at FND. Bridge return = c1[FND] / c2[FND-1].
-      - switch_date = FND - 1 bday  (so the cross-return fires on FND)
-      - regime B = [FND - OFFSET bdays, FND - 1 bday]  (c2 tracking before ICE rolls)
-      - After FND: regime A, c1 = new front. Anchor = c1 = new front price. ✓
+    Verified empirically (KC May'26): ICE rolls %c1 at LTD, not FND.
+    %KC 1! tracked K26 through LTD (18-May-26) and only flipped to N26 the next bday.
+    Same convention applies to all commodities here.
 
-    after_ltd (SB, LCC):
-      - ICE rolls at LTD. Switch and regime B end at LTD (original behaviour).
+      - switch_date = LTD  (bridge return c1[LTD+1] / c2[LTD] fires on LTD+1)
+      - regime B = [LTD - OFFSET bdays, LTD]  (track c2 before ICE rolls)
+      - After LTD: regime A, c1 = new front.
     """
     end_year = pd.Timestamp.today().year + 1
     ct   = generate_contract_table(engine_key, START_YEAR, end_year)
@@ -269,14 +268,10 @@ def get_contract_windows(engine_key):
 
     switch_dates, windows = [], []
     for _, row in ct.iterrows():
-        ltd, fnd = row["LTD"], row["FND"]
-        if cfg.fnd_rule == "after_ltd":
-            switch = ltd
-            windows.append(((ltd - OFFSET * bday).normalize(), ltd))
-        else:
-            switch = (fnd - 1 * bday).normalize()
-            windows.append(((fnd - OFFSET * bday).normalize(), switch))
-        switch_dates.append(switch)
+        ltd = row["LTD"]
+        # OFFSET bdays inclusive → start = LTD - (OFFSET-1) bdays
+        windows.append(((ltd - (OFFSET - 1) * bday).normalize(), ltd))
+        switch_dates.append(ltd)
 
     switch_idx = pd.DatetimeIndex(sorted(set(switch_dates)))
     return windows, switch_idx
@@ -292,16 +287,10 @@ def build_tags(dates, regime_a, engine_key):
     ct["LTD"] = pd.to_datetime(ct["LTD"]).dt.normalize()
     ct["FND"] = pd.to_datetime(ct["FND"]).dt.normalize()
     ct  = ct.sort_values("LTD").reset_index(drop=True)
-    cfg = COMMODITY_CONFIG[engine_key]
-    bday = BDAY_CAL[cfg.calendar]
+    month_num = COMMODITY_CONFIG[engine_key].month_num
 
-    # Build switch_dates aligned to get_contract_windows so labels match prices
-    switch_dates = []
-    for _, row in ct.iterrows():
-        if cfg.fnd_rule == "after_ltd":
-            switch_dates.append(row["LTD"])
-        else:
-            switch_dates.append((row["FND"] - 1 * bday).normalize())
+    # Switch is at LTD for all commodities (matches ICE %c1 roll behaviour)
+    switch_dates = [row["LTD"] for _, row in ct.iterrows()]
     switch_arr = np.array([np.datetime64(s) for s in switch_dates])
 
     rows = []
@@ -313,12 +302,12 @@ def build_tags(dates, regime_a, engine_key):
         if target >= len(ct):
             target = len(ct) - 1
         contract = ct.iloc[target]
-        ltd      = contract["LTD"]
-        label    = f"{MONTH_NAMES[ltd.month]}'{str(ltd.year)[2:]}"
+        delivery_month = month_num[contract["month"]]
+        label = f"{MONTH_NAMES[delivery_month]}'{str(contract['year'])[2:]}"
         rows.append({
             "active_label": label,
             "active_fnd":   contract["FND"],
-            "active_ltd":   ltd,
+            "active_ltd":   contract["LTD"],
         })
     return pd.DataFrame(rows, index=pd.DatetimeIndex(dates))
 
