@@ -180,6 +180,9 @@ st.markdown(
 
 st.markdown("<hr>", unsafe_allow_html=True)
 
+# Load all commodity data once (cached) before tabs render
+all_data = get_all_data()
+
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 tab_season, tab_corr, tab_idx, tab_pv = st.tabs(
     ["Seasonality", "Pairwise Correlation", "Indexed Performance", "Price & Vol"])
@@ -325,8 +328,6 @@ with tab_season:
 with tab_corr:
     st.markdown(lbl("Pairwise Correlation"), unsafe_allow_html=True)
 
-    all_data = get_all_data()
-
     corr_cols = st.columns([1, 1, 4])
     with corr_cols[0]:
         pair_a = st.selectbox("Commodity A", AVAILABLE,
@@ -445,8 +446,6 @@ with tab_idx:
     st.markdown(lbl("Indexed Performance — Base 100 at Start of Period"),
                 unsafe_allow_html=True)
 
-    all_data = get_all_data()
-
     idx_c1, idx_c2 = st.columns([1, 5])
     with idx_c1:
         idx_comms = st.multiselect(
@@ -519,16 +518,6 @@ with tab_pv:
         hovertemplate="%{x|%d/%m/%Y}<br>60d Vol: <b>%{y:.1f}%</b><extra></extra>"),
         secondary_y=True)
 
-    # Annotate roll switch dates — vertical lines at contract transitions
-    if "active_label" in df.columns:
-        # Find dates where active contract changes
-        label_change = df["active_label"] != df["active_label"].shift(1)
-        roll_dates = df.index[label_change & (df.index > df.index[0])]
-        for rd in roll_dates:
-            fig_px.add_vline(
-                x=rd.timestamp() * 1000,
-                line_color="#cccccc", line_width=0.8, line_dash="dot")
-
     fig_px.update_layout(height=420,
         legend=dict(orientation="h", y=1.02, x=0, font=dict(size=8)),
         margin=dict(t=10, b=8, l=4, r=4), **_D)
@@ -539,7 +528,4 @@ with tab_pv:
     fig_px.update_xaxes(showgrid=False, tickfont=dict(size=9))
     st.plotly_chart(fig_px, use_container_width=True)
 
-    st.caption(
-        "Dotted vertical lines mark contract roll dates (active contract change). "
-        "Hover the price line to see the active contract month.")
 
