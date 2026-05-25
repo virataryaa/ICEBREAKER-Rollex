@@ -9,6 +9,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 from pathlib import Path
+import scipy.stats as stats
 
 # ── Data loading ──────────────────────────────────────────────────────────────
 DB_DIR = Path(__file__).resolve().parent.parent / "Database"
@@ -144,48 +145,17 @@ with st.sidebar:
 df = df_raw.loc[str(date_range[0]):str(date_range[1])].copy()
 df = df.dropna(subset=["rollex_px"])
 
-# ── Header ────────────────────────────────────────────────────────────────────
-st.markdown(
-    "<h2 style='font-size:1.3rem;font-weight:700;color:#1d1d1f;margin-bottom:0'>"
-    "Rollex — Roll-Adjusted Price Series</h2>",
-    unsafe_allow_html=True)
-st.markdown("<hr>", unsafe_allow_html=True)
-
-# ── KPI strip ─────────────────────────────────────────────────────────────────
-latest_px   = df["rollex_px"].iloc[-1]
-latest_ret  = df["rollex_ret"].iloc[-1]
-rets        = df["rollex_ret"].dropna()
-z_now       = (latest_ret - rets.mean()) / rets.std() if rets.std() > 0 else 0
-vol_20      = rets.iloc[-20:].std() * np.sqrt(252) * 100 if len(rets) >= 20 else np.nan
-vol_60      = rets.iloc[-60:].std() * np.sqrt(252) * 100 if len(rets) >= 60 else np.nan
-ytd_start   = df.loc[df.index.year == df.index[-1].year, "rollex_px"].iloc[0]
-ytd_ret     = (latest_px / ytd_start - 1) * 100
-
-# active contract label for latest date
-latest_label = df["active_label"].iloc[-1] if "active_label" in df.columns else "—"
-
-ret_color = GREEN if latest_ret >= 0 else DRED
-z_color   = DRED if abs(z_now) > 2 else AMBER if abs(z_now) > 1 else GREEN
-
-st.markdown(
-    kpi("Commodity",   COMM_NAMES[sel_comm].split("—")[0].strip(), color="#444") +
-    kpi("Latest Px",   f"{latest_px:.2f}") +
-    kpi("Active",      latest_label, color="#444") +
-    kpi("Daily Ret",   f"{latest_ret*100:+.2f}%", color=ret_color) +
-    kpi("Z-Score",     f"{z_now:+.2f}σ", color=z_color) +
-    kpi("Vol 20d Ann", f"{vol_20:.1f}%" if not np.isnan(vol_20) else "—") +
-    kpi("Vol 60d Ann", f"{vol_60:.1f}%" if not np.isnan(vol_60) else "—") +
-    kpi("YTD",         f"{ytd_ret:+.1f}%", color=GREEN if ytd_ret >= 0 else DRED),
-    unsafe_allow_html=True)
-
-st.markdown("<hr>", unsafe_allow_html=True)
+# shared stats used across tabs
+rets      = df["rollex_ret"].dropna()
+latest_ret = df["rollex_ret"].iloc[-1]
+z_now      = (latest_ret - rets.mean()) / rets.std() if rets.std() > 0 else 0
 
 # Load all commodity data once (cached) before tabs render
 all_data = get_all_data()
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_season, tab_corr, tab_idx, tab_pv = st.tabs(
-    ["Seasonality", "Pairwise Correlation", "Indexed Performance", "Price & Vol"])
+tab_season, tab_corr, tab_idx, tab_pv, tab_dist = st.tabs(
+    ["Seasonality", "Pairwise Correlation", "Indexed Performance", "Price & Vol", "Return Distribution"])
 
 
 # =============================================================================
@@ -574,3 +544,78 @@ with tab_pv:
     st.plotly_chart(fig_px, use_container_width=True)
 
 
+# =============================================================================
+# TAB 5: Return Distribution
+# =============================================================================
+with tab_dist:
+    st.markdown(lbl(f"{COMM_NAMES[sel_comm]} — Log Return Distribution & Z-Score"),
+                unsafe_allow_html=True)
+
+    log_rets  = np.log1p(df["rollex_ret"]).dropna() * 100   # log returns in %
+    mu        = log_rets.mean()
+    sigma     = log_rets.std()
+    latest_lr = np.log1p(latest_ret) * 100
+    z_lr      = (latest_lr - mu) / sigma if sigma > 0 else 0
+
+    # stats sidebar metrics
+    skew_v  = float(stats.skew(log_rets))
+    kurt_v  = float(stats.kurtosis(log_rets))         # excess kurtosis
+    _, p_jb = stats.jarque_bera(log_rets)
+
+    m1, m2, m3, m4, m5 = st.columns(5)
+    def _stat(col, label, val, color=NAVY):
+        col.markdown(
+            f"<div style='background:#f0f2f8;border-radius:8px;padding:8px 14px'>"
+            f"<div style='font-size:.58rem;color:#6e6e73;text-transform:uppercase;"
+            f"letter-spacing:.1em'>{label}</div>"
+            f"<div style='font-size:.95rem;font-weight:700;color:{color}'>{val}</div>"
+            f"</div>", unsafe_allow_html=True)
+
+    z_col = DRED if abs(z_lr) > 2 else AMBER if abs(z_lr) > 1 else GREEN
+    _stat(m1, "Latest Return", f"{latest_lr:+.2f}%")
+    _stat(m2, "Z-Score",       f"{z_lr:+.2f}σ", color=z_col)
+    _stat(m3, "Skewness",      f"{skew_v:+.3f}")
+    _stat(m4, "Excess Kurtosis", f"{kurt_v:+.3f}")
+    _stat(m5, "Jarque-Bera p", f"{p_jb:.4f}", color=DRED if p_jb < 0.05 else GREEN)
+
+    st.markdown("<div style='margin:10px 0'></div>", unsafe_allow_html=True)
+
+    # histogram + normal fit
+    x_range   = np.linspace(log_rets.min(), log_rets.max(), 400)
+    bin_width = (log_rets.max() - log_rets.min()) / 80
+    y_curve   = stats.norm.pdf(x_range, mu, sigma) * len(log_rets) * bin_width
+
+    fig_hist = go.Figure()
+    fig_hist.add_trace(go.Histogram(
+        x=log_rets, nbinsx=80,
+        marker_color=COMM_COLORS.get(sel_comm, NAVY),
+        opacity=0.72, name="Log returns",
+        hovertemplate="Return: %{x:.2f}%<br>Count: %{y}<extra></extra>"))
+    fig_hist.add_trace(go.Scatter(
+        x=x_range, y=y_curve, mode="lines",
+        name="Normal fit",
+        line=dict(color="#888", width=1.8, dash="dot")))
+
+    # SD bands
+    sd_colors = {1: "#f0a500", 2: "#e07000", 3: DRED}
+    for n_sd, color in sd_colors.items():
+        for sign in [1, -1]:
+            val = mu + sign * n_sd * sigma
+            fig_hist.add_vline(x=val, line_color=color, line_width=1.2, line_dash="dash",
+                annotation_text=f"{sign*n_sd:+d}σ",
+                annotation_position="top right" if sign > 0 else "top left",
+                annotation_font=dict(size=8, color=color))
+
+    # latest return line
+    fig_hist.add_vline(x=latest_lr, line_color=z_col, line_width=2.5,
+        annotation_text=f"Today  {latest_lr:+.2f}%  (z={z_lr:+.2f}σ)",
+        annotation_position="top right",
+        annotation_font=dict(size=9, color=z_col, family="monospace"))
+
+    fig_hist.update_layout(height=420,
+        showlegend=False,
+        margin=dict(t=30, b=8, l=4, r=4),
+        xaxis=dict(showgrid=False, tickfont=dict(size=9), title="Log Return %"),
+        yaxis=dict(showgrid=True, gridcolor="#f0f0f0", tickfont=dict(size=9), title="Count"),
+        **_D)
+    st.plotly_chart(fig_hist, use_container_width=True)
