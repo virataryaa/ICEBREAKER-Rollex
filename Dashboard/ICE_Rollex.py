@@ -355,6 +355,8 @@ with tab_corr:
         if len(common_idx) > 10:
             corr_ret  = ret_a.corr(ret_b)
             corr_px   = px_a.corr(px_b)
+            r2_ret    = corr_ret ** 2
+            r2_px     = corr_px ** 2
             m_ret, b_ret = np.polyfit(ret_a, ret_b, 1)
             x_line = np.linspace(ret_a.min(), ret_a.max(), 100)
             latest_common = common_idx[-1]
@@ -364,7 +366,7 @@ with tab_corr:
             cc1, cc2 = st.columns(2)
 
             with cc1:
-                st.markdown(lbl(f"% Move Correlation  (r = {corr_ret:.3f})", NAVY),
+                st.markdown(lbl(f"% Move Correlation  |  r = {corr_ret:.3f}  |  R² = {r2_ret:.3f}", NAVY),
                             unsafe_allow_html=True)
                 fig_sc1 = go.Figure()
                 fig_sc1.add_trace(go.Scatter(
@@ -379,10 +381,10 @@ with tab_corr:
                     line=dict(color=DRED, width=1.8)))
                 fig_sc1.add_trace(go.Scatter(
                     x=[latest_a_ret], y=[latest_b_ret], mode="markers+text",
-                    marker=dict(color=AMBER, size=10, symbol="star",
-                                line=dict(color="white", width=1)),
+                    marker=dict(color="#FFD700", size=14, symbol="star",
+                                line=dict(color="#333", width=1)),
                     text=[f"Latest ({latest_common.strftime('%d/%m/%y')})"],
-                    textposition="top right", textfont=dict(size=8, color=AMBER),
+                    textposition="top right", textfont=dict(size=8, color="#FFD700"),
                     name="Latest"))
                 fig_sc1.update_layout(height=560,
                     legend=dict(orientation="h", y=1.02, x=0, font=dict(size=8)),
@@ -397,40 +399,38 @@ with tab_corr:
                 st.plotly_chart(fig_sc1, use_container_width=True)
 
             with cc2:
-                st.markdown(lbl(f"Flat Price Correlation  (r = {corr_px:.3f})", RED),
+                st.markdown(lbl(f"Flat Price Correlation  |  r = {corr_px:.3f}  |  R² = {r2_px:.3f}", RED),
                             unsafe_allow_html=True)
-                px_a_n = (px_a - px_a.min()) / (px_a.max() - px_a.min()) * 100
-                px_b_n = (px_b - px_b.min()) / (px_b.max() - px_b.min()) * 100
-                m_px, b_px = np.polyfit(px_a_n, px_b_n, 1)
-                x_px = np.linspace(px_a_n.min(), px_a_n.max(), 100)
+                m_px, b_px = np.polyfit(px_a, px_b, 1)
+                x_px = np.linspace(px_a.min(), px_a.max(), 100)
                 latest_common_px = common_px[-1]
-                latest_a_px = px_a_n.loc[latest_common_px]
-                latest_b_px = px_b_n.loc[latest_common_px]
+                latest_a_px = px_a.loc[latest_common_px]
+                latest_b_px = px_b.loc[latest_common_px]
 
                 fig_sc2 = go.Figure()
                 fig_sc2.add_trace(go.Scatter(
-                    x=px_a_n, y=px_b_n, mode="markers",
+                    x=px_a, y=px_b, mode="markers",
                     marker=dict(color=RED, size=4, opacity=0.35),
-                    hovertemplate=f"{pair_a}: %{{x:.1f}}<br>{pair_b}: %{{y:.1f}}<extra></extra>",
-                    name="Prices (normalised)"))
+                    hovertemplate=f"{pair_a}: %{{x:.2f}}<br>{pair_b}: %{{y:.2f}}<extra></extra>",
+                    name="Flat prices"))
                 fig_sc2.add_trace(go.Scatter(
                     x=x_px, y=m_px * x_px + b_px,
                     mode="lines", name=f"beta={m_px:.2f}",
                     line=dict(color=NAVY, width=1.8)))
                 fig_sc2.add_trace(go.Scatter(
                     x=[latest_a_px], y=[latest_b_px], mode="markers+text",
-                    marker=dict(color=AMBER, size=10, symbol="star",
-                                line=dict(color="white", width=1)),
+                    marker=dict(color="#FFD700", size=14, symbol="star",
+                                line=dict(color="#333", width=1)),
                     text=[f"Latest ({latest_common_px.strftime('%d/%m/%y')})"],
-                    textposition="top right", textfont=dict(size=8, color=AMBER),
+                    textposition="top right", textfont=dict(size=8, color="#FFD700"),
                     name="Latest"))
                 fig_sc2.update_layout(height=560,
                     legend=dict(orientation="h", y=1.02, x=0, font=dict(size=8)),
                     margin=dict(t=10, b=8, l=4, r=4),
                     xaxis=dict(showgrid=True, gridcolor="#f0f0f0",
-                               tickfont=dict(size=9), title=f"{pair_a} (norm 0-100)"),
+                               tickfont=dict(size=9), title=f"{pair_a} price"),
                     yaxis=dict(showgrid=True, gridcolor="#f0f0f0",
-                               tickfont=dict(size=9), title=f"{pair_b} (norm 0-100)"),
+                               tickfont=dict(size=9), title=f"{pair_b} price"),
                     **_D)
                 st.plotly_chart(fig_sc2, use_container_width=True)
         else:
