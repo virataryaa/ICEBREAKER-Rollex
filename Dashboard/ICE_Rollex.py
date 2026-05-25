@@ -155,7 +155,7 @@ all_data = get_all_data()
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 tab_season, tab_corr, tab_idx, tab_pv, tab_dist = st.tabs(
-    ["Seasonality", "Pairwise Correlation", "Indexed Performance", "Price & Vol", "Return Distribution"])
+    ["Seasonality", "Correlation", "Indexed Performance", "Price & Vol", "Return Distribution"])
 
 
 # =============================================================================
@@ -423,13 +423,10 @@ with tab_corr:
     labels      = [COMM_NAMES[c].split("—")[0].strip() for c in avail_comms]
 
     # Mask diagonal — set to None so cells render blank
-    corr_masked = corr_matrix.copy().astype(float)
-    np.fill_diagonal(corr_masked.values, np.nan)
-    z_mat  = [[None if np.isnan(v) else v for v in row]
-              for row in corr_masked.values.tolist()]
-    t_mat  = [[""  if v is None else f"{v:.2f}"
-               for v in row]
-              for row in z_mat]
+    arr = corr_matrix.to_numpy(dtype=float, copy=True)
+    np.fill_diagonal(arr, np.nan)
+    z_mat = [[None if np.isnan(v) else v for v in row] for row in arr]
+    t_mat = [["" if v is None else f"{v:.2f}" for v in row] for row in z_mat]
 
     CORR_CS = [
         [0.0,  "#c0392b"],
