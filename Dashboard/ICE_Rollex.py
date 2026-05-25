@@ -422,10 +422,14 @@ with tab_corr:
     corr_matrix = ret_matrix.corr()
     labels      = [COMM_NAMES[c].split("—")[0].strip() for c in avail_comms]
 
-    z_mat  = corr_matrix.values.tolist()
-    t_mat  = [[f"<b>{v:.2f}</b>" if i == j else f"{v:.2f}"
-               for j, v in enumerate(row)]
-              for i, row in enumerate(z_mat)]
+    # Mask diagonal — set to None so cells render blank
+    corr_masked = corr_matrix.copy().astype(float)
+    np.fill_diagonal(corr_masked.values, np.nan)
+    z_mat  = [[None if np.isnan(v) else v for v in row]
+              for row in corr_masked.values.tolist()]
+    t_mat  = [[""  if v is None else f"{v:.2f}"
+               for v in row]
+              for row in z_mat]
 
     CORR_CS = [
         [0.0,  "#c0392b"],
